@@ -36,23 +36,23 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+/* Size of image that can be processed
+ */
+const unsigned int WIDTH = 640;
+const unsigned int HEIGHT = 480;
+
 /* The clocks that have been encoded in the video frame
  */
 typedef struct
 {
-  __uint32_t buffer_time;
-  __uint32_t stream_time;
-  __uint32_t running_time;
-  __uint32_t clock_time;
-  __uint32_t render_time;
-  __uint32_t render_realtime;
-  __uint32_t latency;
+  __uint64_t buffer_time;
+  __uint64_t stream_time;
+  __uint64_t running_time;
+  __uint64_t clock_time;
+  __uint64_t render_time;
+  __uint64_t render_realtime;
+  __uint64_t latency;
 } encoded_clocks_t;
-
-int width;
-int height;
-int depth;
-encoded_clocks_t clocks;
 
 /* Usage and help
  */
@@ -108,7 +108,7 @@ void parse_header(FILE* fd, int* width, int* height, int* depth)
         {
           if (strncmp(line, "P6", 2) == 0)
           {
-            // printf("P6 ID found\n");
+            printf("P6 ID found\n");
             state = 1;
           }
           break;
@@ -117,11 +117,11 @@ void parse_header(FILE* fd, int* width, int* height, int* depth)
         {
           if (*line == '#')
           {
-            // printf("Comment: %s", line);    // No \n since already at the end of the comment
+            printf("Comment: %s", line);    // No \n since already at the end of the comment
             continue;
           }
           sscanf(line, "%d %d", width, height);
-          // printf("Size found of %d x %d\n", width, height);
+          printf("Size found of %d x %d\n", *width, *height);
           state = 2;
           break;
         }
@@ -129,10 +129,10 @@ void parse_header(FILE* fd, int* width, int* height, int* depth)
         {
           if (*line == '#')
           {
-            // printf("Comment: %s", line);    // No \n since already at the end of the comment
+            printf("Comment: %s", line);    // No \n since already at the end of the comment
             continue;
           }
-          // printf("Colour depth found of %s\n", line);
+          printf("Colour depth found of %s\n", line);
           *depth = atoi(line);
           if (*depth > 255)
           {
@@ -216,23 +216,53 @@ __uint8_t *load_image(FILE* fd, int width, int height)
  * per pixel, where a 24bit RGB value will be have a pxsize of 3.
  * The decoded value is returned.
  */
-static __uint32_t read_timestamp(int lineoffset, __uint8_t *buf, size_t stride, int pxsize)
+static __uint64_t read_timestamp(int lineoffset, __uint8_t *buf, size_t stride, int pxsize)
 {
-  int bit;
-  __uint32_t timestamp = 0;
+  __uint64_t timestamp = 0;
 
-  buf += (lineoffset * 8 + 4) * stride;
+  buf += (lineoffset * 8 + 4) * stride; // Get vertical center of the 8x8 pixel block
 
-  printf("Color=");
-  for (bit = 0; bit < 64; bit++)
+  printf("Clock=");
+  for (int bit = 0; bit < 64; bit++)
   {
-    __uint8_t color = buf[bit * pxsize * 8 + 4];
+    __uint8_t color = buf[bit * pxsize * 8 + 4];  // Bit offset + horiz center of the 8x8 pixel block
     printf("%.02x ", (unsigned int)color);
-    timestamp |= (color & 0x80) ?  (__uint64_t) 1 << (63 - bit) : 0;
+    timestamp |= (color != 0) ?  (__uint64_t) 1 << (63 - bit) : 0;
   }
   printf("\n");
 
   return timestamp;
+}
+
+static void find_first_non_black(__uint8_t *buf)
+{
+  for (int r = 0; r < 480; ++r)
+  {
+    for (int c = 0; c < 640; ++c)
+    {
+      int found = 0;
+      if (buf[r * (640 * 3) + (c * 3) + 0] != 0)
+      {
+        printf("%X pixel found at %dx%d:%d\n", buf[r * (640 * 3) + (c * 3) + 0], r, c, 0);
+        found = 1;
+      }
+      if (buf[r * (640 * 3) + (c * 3) + 1] != 0)
+      {
+        printf("%X pixel found at %dx%d:%d\n", buf[r * (640 * 3) + (c * 3) + 1], r, c, 1);
+        found = 1;
+      }
+      if (buf[r * (640 * 3) + (c * 3) + 2] != 0)
+      {
+        printf("%X pixel found at %dx%d:%d\n", buf[r * (640 * 3) + (c * 3) + 2], r, c, 2);
+        found = 1;
+      }
+      if (found)
+      {
+        return;
+      }
+    }
+  }
+  printf("No white pixel found\n");
 }
 
 /* Decode the timestamp from the image
@@ -245,43 +275,46 @@ static __uint32_t read_timestamp(int lineoffset, __uint8_t *buf, size_t stride, 
  */
 static void decode_timestamps(int width, int height, __uint8_t* image, encoded_clocks_t* clocks)
 {
-  int pixel_stride = 3;
-  int line_stride = width * pixel_stride;
+  const unsigned int pixel_stride = 3;
+  const unsigned int line_stride = width * pixel_stride;
+  // const unsigned int bit_size_in_pixels = 8;
+  // const unsigned int number_of_clocks = 6;
+  // const unsigned int number_of_bits_per_clock = 64;
 
   __uint8_t *imgdata = image;
 
-  /* Centre Vertically: */
-  int vert_offset = (height - (6 * 8)) * line_stride / 2;
-  printf("Vertical center=%d\n", vert_offset);
+  /* Find row that the clocks start on (in bytes) */
+  int vert_offset = ((height - (6 * 8)) * line_stride) / 2; // 6 clocks
+  printf("Vertical offset (in bytes)=%d\n", vert_offset);
   if (vert_offset < 0)
   {
     vert_offset = 0;
   }
   imgdata += vert_offset;
 
-  /* Centre Horizontally: */
-  int horiz_offset = (width - (64 * 8)) * 3 / 2;
-  printf("Horizontal center=%d\n", horiz_offset);
+  /* Find column that the clocks start on (in bytes) */
+  int horiz_offset = ((width - (64 * 8)) * pixel_stride) / 2;  // 64 bits
+  printf("Horizontal offset (in bytes)=%d\n", horiz_offset);
   if (horiz_offset < 0)
   {
     horiz_offset = 0;
   }
   imgdata += horiz_offset;
 
-  clocks->buffer_time = read_timestamp(0, image, width * 3, 3);
-  clocks->stream_time = read_timestamp(1, image, width * 3, 3);
-  clocks->running_time = read_timestamp(2, image, width * 3, 3);
-  clocks->clock_time = read_timestamp(3, image, width * 3, 3);
-  clocks->render_time = read_timestamp(4, image, width * 3, 3);
-  clocks->render_realtime = read_timestamp(5, image, width * 3, 3);
+  clocks->buffer_time = read_timestamp(0, imgdata, line_stride, pixel_stride);
+  clocks->stream_time = read_timestamp(1, imgdata, line_stride, pixel_stride);
+  clocks->running_time = read_timestamp(2, imgdata, line_stride, pixel_stride);
+  clocks->clock_time = read_timestamp(3, imgdata, line_stride, pixel_stride);
+  clocks->render_time = read_timestamp(4, imgdata, line_stride, pixel_stride);
+  clocks->render_realtime = read_timestamp(5, imgdata, line_stride, pixel_stride);
 
   printf("Read timestamps:\n" \
-         "buffer_time = %u\n" \
-         "stream_time = %u\n" \
-         "running_time = %u\n" \
-         "clock_time = %u\n" \
-         "render_time = %u\n" \
-         "render_realtime = %u\n",
+         "buffer_time = %lu\n" \
+         "stream_time = %lu\n" \
+         "running_time = %lu\n" \
+         "clock_time = %lu\n" \
+         "render_time = %lu\n" \
+         "render_realtime = %lu\n",
       clocks->buffer_time,
       clocks->stream_time,
       clocks->running_time,
@@ -289,15 +322,20 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
       clocks->render_time,
       clocks->render_realtime);
 
-  clocks->latency = clocks->clock_time - clocks->render_realtime;
+  clocks->latency = clocks->clock_time - clocks->render_time;
 
-  printf("Latency: %d\n", clocks->latency);
+  printf("Latency: %lu\n", clocks->latency);
 }
 
 /* Main
  */
 int main(int argc, char** argv)
 {
+  int width;
+  int height;
+  int depth;
+  encoded_clocks_t clocks;
+
   if (argc == 1)
   {
     help_usage();
@@ -310,7 +348,13 @@ int main(int argc, char** argv)
     exit(1);
   }
   parse_header(fd, &width, &height, &depth);
+  if (width != WIDTH || height != HEIGHT)
+  {
+    printf("Image of the wrong size\n");
+    exit(1);
+  }
   __uint8_t *image = load_image(fd, width, height);
+  find_first_non_black(image);
   decode_timestamps(width, height, image, &clocks);
   free(image);
   return 0;

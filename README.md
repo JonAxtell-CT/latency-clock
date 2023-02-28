@@ -31,6 +31,10 @@ plug-in designed to be used on screen grabs of the video feed. This allows it to
 For an example use-case see
 <https://stb-tester.com/blog/2016/07/05/latency-measurements>.
 
+Example screen shots can be found in the images folder.
+
+The screendump-of-livefeed-* series are images that has been first scaled to 1280x720 from the original 1920x1080. The image then cropped to just the video feed size of 640x480. Finally the image was converted into b&w.
+
 LICENCE
 -------
 
