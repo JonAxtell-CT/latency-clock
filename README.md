@@ -1,6 +1,11 @@
 latency-clock
 =============
 
+Note:
+Folder to place the resultant lib is /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgsttimeoverlayparse.so
+
+
+
 Measure the latency of a video-output/video-capture combination.
 
 `server` generates a video, drawing timestamps onto the video itself as 64-bit

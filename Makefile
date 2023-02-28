@@ -11,6 +11,9 @@ libgsttimeoverlayparse.so : \
 	$(CC) -o$@ --shared -fPIC $^ $(CFLAGS) \
 	    $$(pkg-config --cflags --libs gstreamer-1.0 gstreamer-video-1.0)
 
+zaysan-server : zaysan-server.c
+	$(CC) -o$@ $^ $(CFLAGS) $$(pkg-config --cflags --libs gstreamer-1.0) -lm
+
 server : server.c
 	$(CC) -o$@ $^ $(CFLAGS) $$(pkg-config --cflags --libs gstreamer-1.0) -lm
 
