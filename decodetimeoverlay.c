@@ -13,6 +13,21 @@
  * video feed. Decoding just needs to see a single pixel in each block.
  * The 8x8 block is mainly so that the clocks can be seen visually.
  *
+ * This program assumes that the gstreamer feed that generates the digital
+ * clock on the video feed has been called using something similar to:
+ *  gst-launch-1.0 videotestsrc is-live=true pattern=0 !
+ *      videoconvert !
+ *      videoscale !
+ *      capsfilter caps=\"video/x-raw, width=640, height=480\" !
+ *      timestampoverlay !
+ *      video/x-raw,format=YUY2 !
+ *      jpegenc !
+ *      rtpjpegpay !
+ *      udpsink host=127.0.0.1 port=8888
+ * The important facts are that the width is 640 or greater as the
+ * digital clock assumes 8-pixels per bit which means with a 64-bit
+ * clock value that 512 pixels are required for a clock.
+ *
  *
  *
  * Copyright (C) 2023 Codethink
@@ -40,6 +55,18 @@
  */
 const unsigned int WIDTH = 640;
 const unsigned int HEIGHT = 480;
+
+/* Size of the "bit" in terms of pixels (width and height)
+ * Assumes square block.
+ */
+const unsigned int PIXELS_PER_BIT = 8;
+
+/* Number of bytes per pixel. A 24-bit RGB value takes 3 bytes
+ */
+const unsigned int PIXEL_STRIDE = 3;
+
+const unsigned int number_of_clocks = 6;
+const unsigned int number_of_bits_per_clock = 64;
 
 /* The clocks that have been encoded in the video frame
  */
@@ -220,20 +247,22 @@ static __uint64_t read_timestamp(int lineoffset, __uint8_t *buf, size_t stride, 
 {
   __uint64_t timestamp = 0;
 
-  buf += (lineoffset * 8 + 4) * stride; // Get vertical center of the 8x8 pixel block
+  buf += (lineoffset * PIXELS_PER_BIT + 4) * stride; // Get vertical center of the 8x8 pixel block
 
   printf("Clock=");
   for (int bit = 0; bit < 64; bit++)
   {
-    __uint8_t color = buf[bit * pxsize * 8 + 4];  // Bit offset + horiz center of the 8x8 pixel block
+    __uint8_t color = buf[bit * pxsize * PIXELS_PER_BIT + 4];  // Bit offset + horiz center of the 8x8 pixel block
     printf("%.02x ", (unsigned int)color);
-    timestamp |= (color != 0) ?  (__uint64_t) 1 << (63 - bit) : 0;
+    timestamp |= (color & 0x80) ?  (__uint64_t) 1 << (63 - bit) : 0;
   }
   printf("\n");
 
   return timestamp;
 }
 
+// Debug code
+#if 0
 static void find_first_non_black(__uint8_t *buf)
 {
   for (int r = 0; r < 480; ++r)
@@ -264,6 +293,7 @@ static void find_first_non_black(__uint8_t *buf)
   }
   printf("No white pixel found\n");
 }
+#endif
 
 /* Decode the timestamp from the image
  * Overall image size is specified in the width and height and the pixel data
@@ -275,16 +305,12 @@ static void find_first_non_black(__uint8_t *buf)
  */
 static void decode_timestamps(int width, int height, __uint8_t* image, encoded_clocks_t* clocks)
 {
-  const unsigned int pixel_stride = 3;
-  const unsigned int line_stride = width * pixel_stride;
-  // const unsigned int bit_size_in_pixels = 8;
-  // const unsigned int number_of_clocks = 6;
-  // const unsigned int number_of_bits_per_clock = 64;
+  const unsigned int line_stride = width * PIXEL_STRIDE;
 
   __uint8_t *imgdata = image;
 
   /* Find row that the clocks start on (in bytes) */
-  int vert_offset = ((height - (6 * 8)) * line_stride) / 2; // 6 clocks
+  int vert_offset = ((height - (number_of_clocks * PIXELS_PER_BIT)) * line_stride) / 2; // 6 clocks
   printf("Vertical offset (in bytes)=%d\n", vert_offset);
   if (vert_offset < 0)
   {
@@ -293,7 +319,7 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
   imgdata += vert_offset;
 
   /* Find column that the clocks start on (in bytes) */
-  int horiz_offset = ((width - (64 * 8)) * pixel_stride) / 2;  // 64 bits
+  int horiz_offset = ((width - (number_of_bits_per_clock * PIXELS_PER_BIT)) * PIXEL_STRIDE) / 2;  // 64 bits
   printf("Horizontal offset (in bytes)=%d\n", horiz_offset);
   if (horiz_offset < 0)
   {
@@ -301,12 +327,12 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
   }
   imgdata += horiz_offset;
 
-  clocks->buffer_time = read_timestamp(0, imgdata, line_stride, pixel_stride);
-  clocks->stream_time = read_timestamp(1, imgdata, line_stride, pixel_stride);
-  clocks->running_time = read_timestamp(2, imgdata, line_stride, pixel_stride);
-  clocks->clock_time = read_timestamp(3, imgdata, line_stride, pixel_stride);
-  clocks->render_time = read_timestamp(4, imgdata, line_stride, pixel_stride);
-  clocks->render_realtime = read_timestamp(5, imgdata, line_stride, pixel_stride);
+  clocks->buffer_time = read_timestamp(0, imgdata, line_stride, PIXEL_STRIDE);
+  clocks->stream_time = read_timestamp(1, imgdata, line_stride, PIXEL_STRIDE);
+  clocks->running_time = read_timestamp(2, imgdata, line_stride, PIXEL_STRIDE);
+  clocks->clock_time = read_timestamp(3, imgdata, line_stride, PIXEL_STRIDE);
+  clocks->render_time = read_timestamp(4, imgdata, line_stride, PIXEL_STRIDE);
+  clocks->render_realtime = read_timestamp(5, imgdata, line_stride, PIXEL_STRIDE);
 
   printf("Read timestamps:\n" \
          "buffer_time = %lu\n" \
@@ -354,7 +380,7 @@ int main(int argc, char** argv)
     exit(1);
   }
   __uint8_t *image = load_image(fd, width, height);
-  find_first_non_black(image);
+  // find_first_non_black(image);
   decode_timestamps(width, height, image, &clocks);
   free(image);
   return 0;
