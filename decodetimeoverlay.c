@@ -50,6 +50,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
+#include <sys/stat.h>
 
 /* Size of image that can be processed
  */
@@ -197,7 +199,7 @@ __uint8_t *load_image(FILE* fd, int width, int height)
   // Reading binary data in format three byte RGB format if color depth is <256
   for (int r = 0; r < height; ++r)
   {
-    printf("R=%d-", r);
+    // printf("R=%d-", r);
     for (int c = 0; c < width; ++c)
     {
       __uint8_t r_color = fgetc(fd);
@@ -223,7 +225,7 @@ __uint8_t *load_image(FILE* fd, int width, int height)
       *image_ptr++ = g_color;
       *image_ptr++ = b_color;
 
-      printf("%02x%02x%02x", r_color, g_color, b_color);
+      // printf("%02x%02x%02x", r_color, g_color, b_color);
 
       if (feof(fd))
       {
@@ -231,7 +233,7 @@ __uint8_t *load_image(FILE* fd, int width, int height)
         exit(1);
       }
     }
-    printf("\n");
+    // printf("\n");
   }
   return image;
 }
@@ -249,14 +251,14 @@ static __uint64_t read_timestamp(int lineoffset, __uint8_t *buf, size_t stride, 
 
   buf += (lineoffset * PIXELS_PER_BIT + 4) * stride; // Get vertical center of the 8x8 pixel block
 
-  printf("Clock=");
+  // printf("Clock=");
   for (int bit = 0; bit < 64; bit++)
   {
     __uint8_t color = buf[bit * pxsize * PIXELS_PER_BIT + 4];  // Bit offset + horiz center of the 8x8 pixel block
-    printf("%.02x ", (unsigned int)color);
-    timestamp |= (color & 0x80) ?  (__uint64_t) 1 << (63 - bit) : 0;
+    // printf("%.02x ", (unsigned int)color);
+    timestamp |= (color & 0x80) ? (__uint64_t) 0 : 1 << (63 - bit);
   }
-  printf("\n");
+  // printf("\n");
 
   return timestamp;
 }
@@ -348,8 +350,7 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
       clocks->render_time,
       clocks->render_realtime);
 
-  clocks->latency = clocks->clock_time - clocks->render_time;
-
+  clocks->latency = clocks->render_time - clocks->clock_time;
   printf("Latency: %lu\n", clocks->latency);
 }
 
@@ -373,6 +374,13 @@ int main(int argc, char** argv)
     printf("Unable to open file\n");
     exit(1);
   }
+
+  // Get the file's creation time as the time the screenshot was taken to compare with
+  // the time encoded in the video feed so as to calculate the latency.
+  struct stat attr;
+  stat(argv[1], &attr);
+  printf("Modified time: %lu %s\n", attr.st_mtime, ctime(&attr.st_mtime));
+
   parse_header(fd, &width, &height, &depth);
   if (width != WIDTH || height != HEIGHT)
   {
@@ -383,5 +391,7 @@ int main(int argc, char** argv)
   // find_first_non_black(image);
   decode_timestamps(width, height, image, &clocks);
   free(image);
+
+  printf("Latency (clock_time - modification_timestamp): %lu\n", clocks.clock_time - attr.st_mtime);
   return 0;
 }
