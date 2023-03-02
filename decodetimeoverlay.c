@@ -80,7 +80,6 @@ typedef struct
   __uint64_t clock_time;
   __uint64_t render_time;
   __uint64_t render_realtime;
-  __uint64_t latency;
 } encoded_clocks_t;
 
 /* Usage and help
@@ -349,9 +348,6 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
       clocks->clock_time,
       clocks->render_time,
       clocks->render_realtime);
-
-  clocks->latency = clocks->render_time - clocks->clock_time;
-  printf("Latency: %lu\n", clocks->latency);
 }
 
 /* Main
@@ -392,6 +388,6 @@ int main(int argc, char** argv)
   decode_timestamps(width, height, image, &clocks);
   free(image);
 
-  printf("Latency (clock_time - modification_timestamp): %lu\n", clocks.clock_time - attr.st_mtime);
+  printf("Latency: %lu\n", clocks.clock_time - attr.st_mtime);
   return 0;
 }
