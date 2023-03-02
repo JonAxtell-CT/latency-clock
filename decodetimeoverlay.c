@@ -388,6 +388,6 @@ int main(int argc, char** argv)
   decode_timestamps(width, height, image, &clocks);
   free(image);
 
-  printf("Latency: %lu\n", clocks.clock_time - attr.st_mtime);
+  printf("Latency: %fms\n", (double)(clocks.clock_time - attr.st_mtime) / 1000000);
   return 0;
 }
