@@ -53,6 +53,8 @@
 #include <time.h>
 #include <sys/stat.h>
 
+#define DEBUG_OUTPUT
+
 /* Size of image that can be processed
  */
 const unsigned int WIDTH = 640;
@@ -61,7 +63,8 @@ const unsigned int HEIGHT = 480;
 /* Size of the "bit" in terms of pixels (width and height)
  * Assumes square block.
  */
-const unsigned int PIXELS_PER_BIT = 8;
+const unsigned int PIXELS_PER_BIT_X = 8;
+const unsigned int PIXELS_PER_BIT_Y = 8;
 
 /* Number of bytes per pixel. A 24-bit RGB value takes 3 bytes
  */
@@ -115,7 +118,7 @@ static int read_line(FILE* fd, char **line)
  * The data from the header is returned in width, height and
  * depth is the number of colours.
  */
-void parse_header(FILE* fd, int* width, int* height, int* depth)
+static void parse_header(FILE* fd, int* width, int* height, int* depth)
 {
   char *line = NULL;
   int state = 0;
@@ -185,7 +188,7 @@ void parse_header(FILE* fd, int* width, int* height, int* depth)
  * Pixel data is encoded as three bytes per pixel in RGB format.
  * The overall image size should be passed in width and height.
  */
-__uint8_t *load_image(FILE* fd, int width, int height)
+static __uint8_t *load_image(FILE* fd, int width, int height)
 {
   __uint8_t* image = malloc((width * 3) * height);
   if (image == NULL)
@@ -198,7 +201,10 @@ __uint8_t *load_image(FILE* fd, int width, int height)
   // Reading binary data in format three byte RGB format if color depth is <256
   for (int r = 0; r < height; ++r)
   {
-    // printf("R=%d-", r);
+    #ifdef DEBUG_OUTPUT
+      // printf("R=%d-", r);
+    #endif
+
     for (int c = 0; c < width; ++c)
     {
       __uint8_t r_color = fgetc(fd);
@@ -224,7 +230,9 @@ __uint8_t *load_image(FILE* fd, int width, int height)
       *image_ptr++ = g_color;
       *image_ptr++ = b_color;
 
-      // printf("%02x%02x%02x", r_color, g_color, b_color);
+      #ifdef DEBUG_OUTPUT
+        // printf("%02x%02x%02x", r_color, g_color, b_color);
+      #endif
 
       if (feof(fd))
       {
@@ -232,9 +240,32 @@ __uint8_t *load_image(FILE* fd, int width, int height)
         exit(1);
       }
     }
-    // printf("\n");
+
+    #ifdef DEBUG_OUTPUT
+      // printf("\n");
+    #endif
   }
   return image;
+}
+
+/* Threshold the image from colour to black and white
+ */
+static void threshold_image(__uint8_t *image, int width, int height)
+{
+  __uint8_t *image_ptr = image;
+
+  for (int r = 0; r < height; ++r)
+  {
+    for (int c = 0; c < width; ++c)
+    {
+      *image_ptr = (*image_ptr > 0x90) ? 0xFF : 0x00;   // r
+      ++image_ptr;
+      *image_ptr = (*image_ptr > 0x90) ? 0xFF : 0x00;   // g
+      ++image_ptr;
+      *image_ptr = (*image_ptr > 0x90) ? 0xFF : 0x00;   // b
+      ++image_ptr;
+    }
+  }
 }
 
 /* Read a timestamp from the screen grab.
@@ -248,18 +279,41 @@ static __uint64_t read_timestamp(int lineoffset, __uint8_t *buf, size_t stride, 
 {
   __uint64_t timestamp = 0;
 
-  buf += (lineoffset * PIXELS_PER_BIT + 4) * stride; // Get vertical center of the 8x8 pixel block
+  buf += (lineoffset * PIXELS_PER_BIT_Y + (PIXELS_PER_BIT_Y / 2)) * stride; // Get vertical center of the 8x8 pixel block
 
-  // printf("Clock=");
+  #ifdef DEBUG_OUTPUT
+    printf("Clock=");
+  #endif
+
   for (int bit = 0; bit < 64; bit++)
   {
-    __uint8_t color = buf[bit * pxsize * PIXELS_PER_BIT + 4];  // Bit offset + horiz center of the 8x8 pixel block
-    // printf("%.02x ", (unsigned int)color);
-    timestamp |= (color & 0x80) ? (__uint64_t) 0 : 1 << (63 - bit);
+    __uint8_t color = buf[bit * pxsize * PIXELS_PER_BIT_X + (PIXELS_PER_BIT_X / 2)];  // Bit offset + horiz center of the 8x8 pixel block
+    color = (color & 0x80) ? 0x00 : 0xFF;;
+    #ifdef DEBUG_OUTPUT
+      printf("%.02x ", (unsigned int)color);
+    #endif
+    timestamp |= (color) ? (__uint64_t) 1 << (63 - bit) : 0;
   }
-  // printf("\n");
+  #ifdef DEBUG_OUTPUT
+    printf("\n");
+  #endif
 
   return timestamp;
+}
+
+static void dump_image(__uint8_t *buf, int width, int height)
+{
+  for (int r = 0; r < height; ++r)
+  {
+    printf("Row: %d:", r);
+    for (int c = 0; c < width; ++c)
+    {
+        printf("%.02x ", buf[r * (width * 3) + (c * 3) + 0]);
+        printf("%.02x ", buf[r * (width * 3) + (c * 3) + 1]);
+        printf("%.02x ", buf[r * (width * 3) + (c * 3) + 2]);
+    }
+    printf("\n");
+  }
 }
 
 // Debug code
@@ -311,7 +365,7 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
   __uint8_t *imgdata = image;
 
   /* Find row that the clocks start on (in bytes) */
-  int vert_offset = ((height - (number_of_clocks * PIXELS_PER_BIT)) * line_stride) / 2; // 6 clocks
+  int vert_offset = ((height - (number_of_clocks * PIXELS_PER_BIT_Y)) * line_stride) / 2; // 6 clocks
   printf("Vertical offset (in bytes)=%d\n", vert_offset);
   if (vert_offset < 0)
   {
@@ -320,7 +374,7 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
   imgdata += vert_offset;
 
   /* Find column that the clocks start on (in bytes) */
-  int horiz_offset = ((width - (number_of_bits_per_clock * PIXELS_PER_BIT)) * PIXEL_STRIDE) / 2;  // 64 bits
+  int horiz_offset = ((width - (number_of_bits_per_clock * PIXELS_PER_BIT_X)) * PIXEL_STRIDE) / 2;  // 64 bits
   printf("Horizontal offset (in bytes)=%d\n", horiz_offset);
   if (horiz_offset < 0)
   {
@@ -336,18 +390,18 @@ static void decode_timestamps(int width, int height, __uint8_t* image, encoded_c
   clocks->render_realtime = read_timestamp(5, imgdata, line_stride, PIXEL_STRIDE);
 
   printf("Read timestamps:\n" \
-         "buffer_time = %lu\n" \
-         "stream_time = %lu\n" \
-         "running_time = %lu\n" \
-         "clock_time = %lu\n" \
-         "render_time = %lu\n" \
-         "render_realtime = %lu\n",
-      clocks->buffer_time,
-      clocks->stream_time,
-      clocks->running_time,
-      clocks->clock_time,
-      clocks->render_time,
-      clocks->render_realtime);
+         "buffer_time = 0x%lx %s" \
+         "stream_time = 0x%lx %s" \
+         "running_time = 0x%lx %s" \
+         "clock_time = 0x%lx %s" \
+         "render_time = 0x%lx %s" \
+         "render_realtime = 0x%lx %s",
+      clocks->buffer_time, ctime((const time_t *)&clocks->buffer_time),
+      clocks->stream_time, ctime((const time_t *)&clocks->stream_time),
+      clocks->running_time, ctime((const time_t *)&clocks->running_time),
+      clocks->clock_time, ctime((const time_t *)&clocks->clock_time),
+      clocks->render_time, ctime((const time_t *)&clocks->render_time),
+      clocks->render_realtime, ctime((const time_t *)&clocks->render_realtime));
 }
 
 /* Main
@@ -384,10 +438,16 @@ int main(int argc, char** argv)
     exit(1);
   }
   __uint8_t *image = load_image(fd, width, height);
+  if (0) threshold_image(image, width, height);
+  dump_image(image, width, height);
   // find_first_non_black(image);
   decode_timestamps(width, height, image, &clocks);
   free(image);
 
+  time_t current = time(NULL);
+  printf("Current: %lx\n", (unsigned long)current);
+
+  printf("Filestamp: %lx\n", attr.st_mtime);
   printf("Latency: %fms\n", (double)(clocks.clock_time - attr.st_mtime) / 1000000);
   return 0;
 }
